@@ -4,6 +4,7 @@ Plugin Name: Mi Panel de Administración de AIRALO
 Description: Plugin para gestionar la API de Airalo
 Version: 1.0
 Author: <a href="https://www.suop.es/" target="_blank">SUOP</a> - Hugo Perez-Vigo
+License: CC BY-NC-SA 4.0
 */
 
 defined('ABSPATH') or die('Acceso directo no permitido.');

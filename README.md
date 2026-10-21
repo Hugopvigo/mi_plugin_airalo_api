@@ -140,4 +140,8 @@ El [`LICENSE`](LICENSE) del repositorio es **CC BY-NC-SA 4.0** (Creative Commons
 Attribution-NonCommercial-ShareAlike 4.0 International): se puede compartir y adaptar, con
 atribución, **sin uso comercial** y manteniendo la misma licencia en las obras derivadas.
 
+Todo está alineado con ese fichero: la cabecera del plugin (`api-airalo.php`) indica
+`License: CC BY-NC-SA 4.0`. Este repositorio no usa Composer, así que no hay `composer.json` que
+declarar.
+
 © 2025-2026 SUOP Mobile SL — Hugo Pérez-Vigo ([@hugopvigo](https://twitter.com/hugopvigo)).
