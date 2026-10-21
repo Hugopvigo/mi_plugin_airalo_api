@@ -1,3 +1,7 @@
+<meta property="og:title" content="MI PLUGIN AIRALO API">
+<meta property="og:description" content="Panel de gestión de la API de Airalo para WordPress.">
+<meta property="og:image" content="https://raw.githubusercontent.com/Hugopvigo/mi_plugin_airalo_api/main/docs/capturas/og.png">
+
 <p align="center">
   <img src="docs/capturas/00-cabecera.png" alt="Mi Plugin Airalo API — panel de gestión de la API de Airalo para WordPress" width="100%">
 </p>
