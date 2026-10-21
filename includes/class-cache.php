@@ -2,6 +2,25 @@
 class Airalo_Cache {
     private $logger;
     private $prefix = 'airalo_api_';
+    private static $instance = null;
+
+    /**
+     * Instancia compartida de la caché.
+     *
+     * @param Airalo_Logger|null $logger Logger para los mensajes de la caché.
+     * @return Airalo_Cache
+     */
+    public static function get_instance($logger = null) {
+        if (self::$instance === null) {
+            if ($logger === null) {
+                $logger = Airalo_Logger::get_instance();
+            }
+
+            self::$instance = new self($logger);
+        }
+
+        return self::$instance;
+    }
 
     public function __construct($logger) {
         $this->logger = $logger;

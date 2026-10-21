@@ -1,3 +1,21 @@
+<?php
+/**
+ * Consulta de eSIM por ICCID.
+ *
+ * Variables disponibles: $iccid y $esim_data.
+ */
+
+defined('ABSPATH') or exit;
+
+if (!isset($iccid)) {
+    $iccid = '';
+}
+
+if (!isset($esim_data)) {
+    $esim_data = array();
+}
+?>
+
 <div class="wrap">
     <h1 class="wp-heading-inline">Información de eSIM</h1>
     

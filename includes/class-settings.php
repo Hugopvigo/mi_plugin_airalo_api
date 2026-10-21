@@ -1,6 +1,25 @@
 <?php
 class Airalo_Settings {
     private $logger;
+    private static $instance = null;
+
+    /**
+     * Instancia compartida de los ajustes.
+     *
+     * @param Airalo_Logger|null $logger Logger.
+     * @return Airalo_Settings
+     */
+    public static function get_instance($logger = null) {
+        if (self::$instance === null) {
+            if ($logger === null) {
+                $logger = Airalo_Logger::get_instance();
+            }
+
+            self::$instance = new self($logger);
+        }
+
+        return self::$instance;
+    }
 
     public function __construct($logger) {
         $this->logger = $logger;

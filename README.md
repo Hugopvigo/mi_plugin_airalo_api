@@ -31,31 +31,59 @@ en lugar de llamar a la API a mano:
 
 ## Estado del proyecto
 
-**Es un prototipo: todavía no arranca.** Conviene saberlo antes de instalarlo. Lo que falta:
+**Arranca.** El plugin se carga, registra su menú en el panel y sus páginas
+responden. Lo que sigue sin estar hecho:
 
-- `api-airalo.php` carga `includes/security-checks.php`, **que no está en el repositorio**. El
-  `require_once` de un fichero inexistente es un error fatal, así que el plugin no llega a
-  registrar ni el menú.
-- `templates/admin/logs.php` tiene un **error de sintaxis** en la línea 9 (`isset(…)` sin cerrar),
-  así que la vista de logs no se puede cargar.
-- Las clases de `includes/` **nunca se cargan**: `api-airalo.php` no las incluye, así que el
-  dashboard y el cliente REST que hay en `includes/` no llegan a usarse. El menú que registra el
-  fichero principal es otro, con subpáginas de ejemplo (`Submit Order`, `Get Order`,
-  `Update eSIM`) que además apuntan a funciones comentadas en el propio fichero.
-- `Airalo_API_Handler::request_new_token()` **devuelve un token simulado**: nunca llama al
-  endpoint de autenticación de Airalo, así que las peticiones reales a la API fallarían.
-- Faltan las constantes `AIRALO_API_PLUGIN_DIR`, `AIRALO_API_PLUGIN_URL`, `AIRALO_API_VERSION` y
-  `AIRALO_API_LOG_DIR`, que usan las clases y las plantillas, y los ficheros
-  `templates/admin/log-viewer.php` y `assets/js/admin.js`.
+- **Faltan credenciales de Airalo.** Sin `AIRALO_CLIENT_ID` y
+  `AIRALO_CLIENT_SECRET` en el entorno, el dashboard muestra `DESCONECTADO` y
+  cualquier llamada a la API devuelve el error
+  «Faltan credenciales de Airalo». No se inventan tokens ni se llaman a
+  endpoints inventados: sin credenciales, no hay peticiones.
+- **El modo `sandbox` no está verificado contra la API real.** El host
+  `sandbox-partners-api.airalo.com` viene del diseño original de este plugin;
+  el cliente que sí funciona (el plugin hermano `plugin_airalo_wordpress`) solo
+  usa `https://partners-api.airalo.com/v2`. Si el host de sandbox no existe,
+  hay que cambiar `Airalo_API_Handler::$sandbox_url`.
+- **Las respuestas de la API no están validadas contra la documentación de
+  Airalo.** Las plantillas pintan los campos con `?? 'N/A'`, así que un cambio
+  en el formato de la API se ve como campos en blanco, no como un error.
+- **Solo hay dos endpoints implementados** más el de autenticación: estados de
+  orden (`/v2/orders/statuses`) y consulta de eSIM (`/v2/sims/{iccid}`). No hay
+  pedidos, ni top-ups, ni refunds, ni conciliación.
+- **El JavaScript es una mejora progresiva.** `assets/js/admin.js` copia al
+  portapapeles, filtra tablas y pide confirmación; no hay ningún endpoint AJAX
+  (`admin-ajax.php` todavía no lo usa nadie).
+- **No se ha probado con credenciales reales ni contra el API de Airalo.** Lo
+  único verificado es que el plugin carga, registra sus páginas, pide el token
+  al endpoint correcto y lo usa como `Bearer`.
 
-El repositorio está aquí para dejar el diseño a la vista y seguir con él; no es una release.
+Lo que sí está hecho:
+
+- `api-airalo.php` carga `includes/security-checks.php` (ya existe) y las siete
+  clases de `includes/`, en orden.
+- El menú del admin es el real: `Airalo_Admin_Pages` registra Dashboard, eSIMs,
+  Estados de Orden y Logs. Ya no quedan las subpáginas de ejemplo
+  (`Submit Order`, `Get Order`, `Update eSIM`) ni sus funciones comentadas.
+- `Airalo_Auth::request_new_token()` pide el token de verdad a
+  `{base}/v2/token` con `client_id`, `client_secret` y
+  `grant_type=client_credentials`, y lo cachea hasta su caducidad.
+- Las cuatro constantes que faltaban (`AIRALO_API_PLUGIN_DIR`,
+  `AIRALO_API_PLUGIN_URL`, `AIRALO_API_VERSION`, `AIRALO_API_LOG_DIR`) están
+  definidas, y el directorio de logs se crea solo.
+- `templates/admin/logs.php` ya no tiene el error de sintaxis, y existen
+  `templates/admin/log-viewer.php`, `templates/admin/main.php`,
+  `templates/admin/order-statuses.php`, `templates/admin/order-status-single.php`
+  y `assets/js/admin.js`.
+
+El repositorio sigue siendo un prototipo: úsalo con el modo `sandbox` y
+credenciales de prueba, no contra producción.
 
 ## Requisitos
 
 | Componente | Para qué |
 |---|---|
 | WordPress | Admin con `manage_options` |
-| PHP 7.0+ | El código usa `??` y arrays cortos |
+| PHP 7.4+ | El plugin usa `??`, arrays cortos y comprobaciones de versión al arrancar |
 | Extensión `json` | Para hablar con la API de Airalo |
 
 No hace falta Composer: este plugin no tiene `composer.json` ni dependencias.
@@ -67,8 +95,8 @@ cd /ruta/al/wp-content/plugins/
 git clone https://github.com/Hugopvigo/mi_plugin_airalo_api.git
 ```
 
-Actívalo desde *Plugins*. El `require_once` del fichero que falta es un error fatal de PHP, así que
-en el servidor verás el error en el log y la activación no cuaja.
+Actívalo desde *Plugins*. Al activarlo se crea el directorio de logs
+(`wp-content/uploads/airalo-api-logs/`) y se deja el modo de API en `sandbox`.
 
 ## Configuración
 
@@ -85,7 +113,9 @@ guarda la página de ajustes. `.env.example` trae los tres nombres con valores d
 
 Ojo: **nada en este plugin carga el fichero `.env`**. No hay `vlucas/phpdotenv` ni ningún
 `require` que lo lea, así que las variables tienen que estar exportadas en el entorno que lanza
-PHP (por ejemplo, en el `www-data` del servicio) para que `getenv()` las devuelva.
+PHP (por ejemplo, en el `www-data` del servicio) para que `getenv()` las devuelva. El plugin
+busca `AIRALO_CLIENT_ID` y `AIRALO_CLIENT_SECRET` en `getenv()`, `$_ENV` y `$_SERVER`, en ese
+orden. Si no las encuentra, no llama a la API: lo dice con un mensaje claro.
 
 ## Cómo está hecho
 
@@ -97,40 +127,58 @@ Siete clases en `includes/`, que son el diseño real del plugin:
 | `Airalo_Cache` | Envoltorio sobre transients, con prefijo `airalo_api_` y volcado masivo |
 | `Airalo_Logger` | Log en fichero diario, rotación a 5 MB y purga de lo que tenga más de 30 días |
 | `Airalo_Settings` | Opción `airalo_api_mode` (sandbox/production) y su página en *Ajustes* |
-| `Airalo_Auth` | Comprueba `manage_options` en las páginas del plugin y añade cabeceras de seguridad |
-| `Airalo_Admin_Pages` | Menú del admin: dashboard, estados de orden y logs |
+| `Airalo_Auth` | Token de portador contra `{base}/v2/token`, control de acceso y cabeceras de seguridad |
+| `Airalo_Admin_Pages` | Menú del admin: dashboard, eSIMs, estados de orden y logs |
 | `Airalo_Utilities` | Utilidades: sanitizar datos, validar ICCID, formatear bytes, nonces |
+
+Encima de ellas, `includes/security-checks.php` define `Airalo_Security_Checks`:
+comprueba versión de PHP, funciones de WordPress y constantes del plugin antes
+de dejar que el plugin arranque, y centraliza los helpers de capacidades
+(`require_capability()`), nonces (`verify_nonce()`) y sanitización de entrada
+(`sanitize_input()`), que usan las páginas del admin.
 
 Endpoints que llama hoy el cliente:
 
 | Método | Endpoint | Caché |
 |---|---|---|
+| `POST` | `/v2/token` | Hasta la caducidad que indica la API (menos 5 minutos de margen) |
 | `GET` | `/v2/orders/statuses` | 1 hora |
 | `GET` | `/v2/orders/statuses/{slug}` | 1 hora |
+| `GET` | `/v2/sims/{iccid}` | 1 hora |
 
 `Airalo_API_Handler::make_request()` admite `GET`, `POST`, `PUT` y `PATCH` sobre cualquier
-endpoint, así que el resto está por escribir. La plantilla de eSIMs ya espera la respuesta de
-`/v2/sims/{iccid}` (ICCID, estado, país, fechas, datos restantes y paquete), pero ningún método
-del cliente la pide todavía.
+endpoint, así que el resto está por escribir: pedidos, top-ups, refunds y
+conciliación.
+
+El token se pide como en el plugin hermano `plugin_airalo_wordpress`:
+`POST {base}/v2/token` con el cuerpo `client_id`, `client_secret` y
+`grant_type=client_credentials`; la respuesta trae `data.access_token` y
+`data.expires_in`. El token se guarda en un transient (`airalo_api_airalo_api_token`)
+con la caducidad que manda la API, menos 5 minutos de margen, y además se
+comprueba la fecha de caducidad antes de usarlo.
 
 Las bases de la API son `https://sandbox-partners-api.airalo.com` y
-`https://partners-api.airalo.com`, según el modo activo.
+`https://partners-api.airalo.com`, según el modo activo (los endpoints llevan
+el prefijo `/v2`).
 
 ## Estructura
 
 ```
 mi_plugin_airalo_api/
-├── api-airalo.php              bootstrap: constantes, menú del admin y páginas de ejemplo
+├── api-airalo.php              bootstrap: constantes, comprobaciones de seguridad y arranque
 ├── .env.example                nombres de las variables de entorno
-├── assets/css/admin.css        estilos del dashboard
+├── assets/
+│   ├── css/admin.css            estilos del dashboard
+│   └── js/admin.js              mejoras progresivas del panel
 ├── includes/                   las siete clases del diseño
 │   ├── class-admin-pages.php     menú y páginas del admin
 │   ├── class-api-handler.php     cliente REST + caché
-│   ├── class-auth.php            control de acceso y cabeceras de seguridad
+│   ├── class-auth.php            token de Airalo, control de acceso y cabeceras
 │   ├── class-cache.php           caché sobre transients
 │   ├── class-logger.php          log en fichero con rotación
 │   ├── class-settings.php        opción del modo de API
-│   └── class-utilities.php       utilidades
+│   ├── class-utilities.php       utilidades
+│   └── security-checks.php       comprobaciones de seguridad y helpers (nonces, capacidades)
 └── templates/admin/            dashboard, eSIMs, logs, ajustes y estados de orden
 ```
 

@@ -4,104 +4,119 @@ Plugin Name: Mi Panel de Administración de AIRALO
 Description: Plugin para gestionar la API de Airalo
 Version: 1.0
 Author: <a href="https://www.suop.es/" target="_blank">SUOP</a> - Hugo Perez-Vigo
-License: CC BY-NC-SA 4.0
 */
 
 defined('ABSPATH') or die('Acceso directo no permitido.');
 
-// Configuración de seguridad adicional
-if (!defined('AIRALO_API_SECURE_KEY')) {
-    define('AIRALO_API_SECURE_KEY', wp_generate_password(64, true, true));
+// -----------------------------------------------------------------------------
+// Constantes del plugin
+// -----------------------------------------------------------------------------
+
+// Ruta del plugin en el disco, con barra final.
+if (!defined('AIRALO_API_PLUGIN_DIR')) {
+    define('AIRALO_API_PLUGIN_DIR', plugin_dir_path(__FILE__));
 }
 
-// Cargar el núcleo seguro del plugin
-require_once plugin_dir_path(__FILE__) . 'includes/security-checks.php';
+// URL pública de los recursos del plugin, con barra final.
+if (!defined('AIRALO_API_PLUGIN_URL')) {
+    define('AIRALO_API_PLUGIN_URL', plugin_dir_url(__FILE__));
+}
 
-// Verificar requisitos de seguridad antes de cargar
+// Versión del plugin. Tiene que coincidir con la cabecera de este fichero:
+// la usan las plantillas para cachear los assets del admin.
+if (!defined('AIRALO_API_VERSION')) {
+    define('AIRALO_API_VERSION', '1.0');
+}
+
+// Directorio de logs del plugin, con barra final.
+if (!defined('AIRALO_API_LOG_DIR')) {
+    $airalo_api_uploads = defined('WP_CONTENT_DIR')
+        ? WP_CONTENT_DIR . '/uploads'
+        : ABSPATH . 'wp-content/uploads';
+
+    define('AIRALO_API_LOG_DIR', rtrim($airalo_api_uploads, '/\\') . '/airalo-api-logs/');
+}
+
+// Clave secreta del plugin. No la usa nadie todavía, pero se deja definida
+// para que ningún otro código tenga que generarla en caliente.
+if (!defined('AIRALO_API_SECURE_KEY')) {
+    define('AIRALO_API_SECURE_KEY', function_exists('wp_generate_password')
+        ? wp_generate_password(64, true, true)
+        : bin2hex(random_bytes(32)));
+}
+
+// -----------------------------------------------------------------------------
+// Directorio de logs
+// -----------------------------------------------------------------------------
+
+if (!is_dir(AIRALO_API_LOG_DIR)) {
+    if (function_exists('wp_mkdir_p')) {
+        wp_mkdir_p(AIRALO_API_LOG_DIR);
+    } else {
+        @mkdir(AIRALO_API_LOG_DIR, 0755, true); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+    }
+}
+
+// -----------------------------------------------------------------------------
+// Comprobaciones de seguridad
+// -----------------------------------------------------------------------------
+
+// Se carga antes que las clases: decide si el plugin puede seguir cargándose.
+require_once AIRALO_API_PLUGIN_DIR . 'includes/security-checks.php';
+
 if (!Airalo_Security_Checks::pass_all_checks()) {
     add_action('admin_notices', 'airalo_api_security_notice');
+
     return;
 }
 
-// Añadir el menú principal al dashboard
-function airalo_api_agregar_menu_admin() {
-    add_menu_page(
-        'API AIRALO MANAGEMENT',          // Título de la página
-        'AIRALO API',                     // Texto del menú
-        'manage_options',                 // Solo administradores
-        'airalo-api',                     // Slug del menú
-        'airalo_api_pagina_principal',    // Función que muestra el contenido
-        'dashicons-rest-api',             // Icono de API (más adecuado)
-        6                                 // Posición en el menú
-    );
-    
-    // Añadir submenús
-    add_submenu_page(
-        'airalo-api',                     // Slug del menú padre
-        'Submit Order',                   // Título de la página
-        'Submit Order',                   // Texto del menú
-        'manage_options',                 // Capacidad requerida
-        'airalo-api-submit-order',        // Slug único
-        'airalo_api_pagina_submit_order'  // Función callback
-    );
-    
-    add_submenu_page(
-        'airalo-api',
-        'Get Order',
-        'Get Order',
-        'manage_options',
-        'airalo-api-get-order',
-        'airalo_api_pagina_get_order'
-    );
-    
-    add_submenu_page(
-        'airalo-api',
-        'Update eSIM',
-        'Update eSIM',
-        'manage_options',
-        'airalo-api-update-esim',
-        'airalo_api_pagina_update_esim'
-    );
-}
-add_action('admin_menu', 'airalo_api_agregar_menu_admin');
+// -----------------------------------------------------------------------------
+// Clases del plugin
+// -----------------------------------------------------------------------------
+//
+// El orden importa: el logger no depende de nada, la caché usa el logger, el
+// cliente de la API usa la caché y el logger, y las páginas del admin usan el
+// cliente.
 
-// Función para la página principal
-function airalo_api_pagina_principal() {
-    // Verificar permisos
-    if (!current_user_can('manage_options')) {
-        wp_die(__('No tienes permisos para acceder a esta página.'));
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-logger.php';
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-cache.php';
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-auth.php';
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-utilities.php';
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-settings.php';
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-api-handler.php';
+require_once AIRALO_API_PLUGIN_DIR . 'includes/class-admin-pages.php';
+
+// -----------------------------------------------------------------------------
+// Arranque
+// -----------------------------------------------------------------------------
+
+$airalo_api_logger   = Airalo_Logger::get_instance();
+$airalo_api_cache    = Airalo_Cache::get_instance($airalo_api_logger);
+$airalo_api_handler  = Airalo_API_Handler::get_instance($airalo_api_cache, $airalo_api_logger);
+$airalo_api_settings = Airalo_Settings::get_instance($airalo_api_logger);
+$airalo_api_auth     = Airalo_Auth::get_instance();
+$airalo_api_pages    = Airalo_Admin_Pages::get_instance($airalo_api_handler, $airalo_api_logger);
+
+// -----------------------------------------------------------------------------
+// Activación
+// -----------------------------------------------------------------------------
+
+register_activation_hook(__FILE__, 'airalo_api_activate');
+
+/**
+ * Al activar el plugin: deja el modo de API por defecto y prepara el
+ * directorio de logs.
+ *
+ * @return void
+ */
+function airalo_api_activate() {
+    if (!is_dir(AIRALO_API_LOG_DIR)) {
+        if (function_exists('wp_mkdir_p')) {
+            wp_mkdir_p(AIRALO_API_LOG_DIR);
+        } else {
+            @mkdir(AIRALO_API_LOG_DIR, 0755, true); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+        }
     }
-    
-    ?>
-    <div class="wrap">
-        <h1><?php echo esc_html(get_admin_page_title()); ?></h1>
-        <div class="card">
-            <h2 class="title">Bienvenido al panel de gestión de AIRALO API</h2>
-            <p>Seleccione una opción del menú lateral para gestionar las operaciones con la API.</p>
-        </div>
-    </div>
-    <?php
-}
 
-// Función para Submit Order
-function airalo_api_pagina_submit_order() {
-    if (!current_user_can('manage_options')) {
-        wp_die(__('No tienes permisos para acceder a esta página.'));
-    }
-    
-    ?>
-    <div class="wrap">
-        <h1>Submit Order - AIRALO API</h1>
-        <!-- Aquí iría el formulario para submit order -->
-        <form method="post" action="">
-            <?php wp_nonce_field('airalo_submit_order_action', 'airalo_nonce'); ?>
-            <!-- Campos del formulario -->
-            <input type="submit" name="submit_order" class="button button-primary" value="Enviar Order">
-        </form>
-    </div>
-    <?php
+    Airalo_Settings::get_instance()->activate();
 }
-
-// Funciones para las otras páginas (similar a la anterior)
-//function airalo_api_pagina_get_order() { /* ... */ }
-//function airalo_api_pagina_update_esim() { /* ... */ }

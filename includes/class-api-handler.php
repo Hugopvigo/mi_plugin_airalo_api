@@ -1,5 +1,20 @@
 <?php
+/**
+ * Cliente REST de la API de Airalo.
+ *
+ * Base: {sandbox|production}-partners-api.airalo.com, con los endpoints de la
+ * versión v2 (`/v2/...`). El token de portador se pide a `/v2/token` con las
+ * credenciales de partner y se cachea hasta su caducidad.
+ */
 class Airalo_API_Handler {
+    /**
+     * Bases de la API de Airalo.
+     *
+     * El host de sandbox viene del diseño original de este plugin y no está
+     * verificado contra la API real: el plugin hermano `plugin_airalo_wordpress`,
+     * que sí funciona, solo usa `https://partners-api.airalo.com/v2`. Si
+     * `sandbox-partners-api.airalo.com` no responde, hay que corregirlo aquí.
+     */
     private $sandbox_url = 'https://sandbox-partners-api.airalo.com';
     private $production_url = 'https://partners-api.airalo.com';
     private $api_mode;
@@ -7,51 +22,120 @@ class Airalo_API_Handler {
     private $token_expiry;
     private $cache;
     private $logger;
+    private static $instance = null;
+
+    /**
+     * Instancia compartida del cliente.
+     *
+     * @param Airalo_Cache|null  $cache  Caché de respuestas y token.
+     * @param Airalo_Logger|null $logger Logger.
+     * @return Airalo_API_Handler
+     */
+    public static function get_instance($cache = null, $logger = null) {
+        if (self::$instance === null) {
+            if ($logger === null) {
+                $logger = Airalo_Logger::get_instance();
+            }
+
+            if ($cache === null) {
+                $cache = Airalo_Cache::get_instance($logger);
+            }
+
+            self::$instance = new self($cache, $logger);
+        }
+
+        return self::$instance;
+    }
 
     public function __construct($cache, $logger) {
         $this->cache = $cache;
         $this->logger = $logger;
         $this->api_mode = getenv('AIRALO_API_MODE') ?: get_option('airalo_api_mode', 'sandbox');
-        $this->refresh_token();
     }
 
-    private function refresh_token() {
+    /**
+     * Comprueba si hay un token de portador válido (y lo pide si hace falta).
+     *
+     * @return bool
+     */
+    public function has_valid_token() {
+        return $this->ensure_token();
+    }
+
+    /**
+     * Token de portador en uso, o cadena vacía.
+     *
+     * @return string
+     */
+    public function get_access_token() {
+        $this->ensure_token();
+
+        return (string) $this->access_token;
+    }
+
+    /**
+     * Modo de API activo: `sandbox` o `production`.
+     *
+     * @return string
+     */
+    public function get_api_mode() {
+        return $this->api_mode;
+    }
+
+    /**
+     * Pide un token nuevo a Airalo.
+     *
+     * El token se pide contra el endpoint real de autenticación
+     * (`{base}/v2/token`) con las credenciales de partner. Si no hay
+     * credenciales, se registra el motivo y se devuelve false.
+     *
+     * @return array{token:string,expires_in:int}|false
+     */
+    public function request_new_token() {
+        return Airalo_Auth::request_new_token(
+            $this->get_base_url(),
+            null,
+            null,
+            $this->logger
+        );
+    }
+
+    /**
+     * Carga o renueva el token de portador.
+     *
+     * @return bool True si hay token válido.
+     */
+    private function ensure_token() {
+        if (!empty($this->access_token) && $this->token_expiry > time()) {
+            return true;
+        }
+
         $token_data = $this->cache->get('airalo_api_token');
-        
-        if ($token_data && $token_data['expiry'] > time()) {
+
+        if (is_array($token_data) && !empty($token_data['token']) && ($token_data['expiry'] ?? 0) > time()) {
             $this->access_token = $token_data['token'];
-            $this->token_expiry = $token_data['expiry'];
-            return;
+            $this->token_expiry = (int) $token_data['expiry'];
+
+            return true;
         }
 
-        // Obtener nuevo token (simulado - en realidad deberías llamar al endpoint de autenticación de Airalo)
         $new_token = $this->request_new_token();
-        
-        if ($new_token) {
-            $this->access_token = $new_token['token'];
-            $this->token_expiry = time() + $new_token['expires_in'];
-            
-            $this->cache->set('airalo_api_token', [
-                'token' => $this->access_token,
-                'expiry' => $this->token_expiry
-            ], $new_token['expires_in']);
-        }
-    }
 
-    private function request_new_token() {
-        $client_id = getenv('AIRALO_CLIENT_ID');
-        $client_secret = getenv('AIRALO_CLIENT_SECRET');
-        
-        if (!$client_id || !$client_secret) {
-            $this->logger->log('Error: Falta CLIENT_ID o CLIENT_SECRET en .env');
+        if (!$new_token) {
             return false;
         }
 
-        // Simulación de obtención de token (adaptar a la API real de Airalo)
-        return [
-            'token' => 'nuevo_token_simulado_' . bin2hex(random_bytes(16)),
-            'expires_in' => 43200 // 12 horas en segundos
-        ];
+        $this->access_token = $new_token['token'];
+        $this->token_expiry = time() + $new_token['expires_in'];
+
+        $ttl = Airalo_Auth::get_token_ttl($new_token['expires_in']);
+
+        $this->cache->set('airalo_api_token', [
+            'token'  => $this->access_token,
+            'expiry' => $this->token_expiry,
+        ], $ttl);
+
+        return true;
     }
 
     private function get_base_url() {
@@ -60,13 +144,18 @@ class Airalo_API_Handler {
 
     public function make_request($endpoint, $method = 'GET', $params = array(), $cache_ttl = 0) {
         $cache_key = 'api_req_' . md5($endpoint . serialize($params));
-        
+
         if ($cache_ttl > 0 && $cached = $this->cache->get($cache_key)) {
             return $cached;
         }
 
-        $this->refresh_token();
-        
+        if (!$this->ensure_token()) {
+            return [
+                'success' => false,
+                'error'   => 'Faltan credenciales de Airalo: define AIRALO_CLIENT_ID y AIRALO_CLIENT_SECRET en el entorno del servidor.',
+            ];
+        }
+
         $url = $this->get_base_url() . $endpoint;
         $args = [
             'headers' => [
@@ -78,14 +167,18 @@ class Airalo_API_Handler {
         ];
 
         if ($method === 'GET' && !empty($params)) {
-            $url = add_query_arg(array_map('urlencode', $params), $url);
+            $query = http_build_query($params, '', '&');
+
+            if ($query !== '') {
+                $url .= (strpos($url, '?') === false ? '?' : '&') . $query;
+            }
         } elseif (in_array($method, ['POST', 'PUT', 'PATCH'])) {
             $args['body'] = json_encode($params);
             $args['headers']['Content-Type'] = 'application/json';
         }
 
         $args['method'] = $method;
-        
+
         $response = wp_remote_request(esc_url_raw($url), $args);
         $log_data = [
             'endpoint' => $endpoint,
@@ -143,5 +236,24 @@ class Airalo_API_Handler {
 
     public function get_order_status_name($slug) {
         return $this->make_request('/v2/orders/statuses/' . sanitize_title($slug), 'GET', [], HOUR_IN_SECONDS);
+    }
+
+    /**
+     * Datos de una eSIM a partir de su ICCID.
+     *
+     * @param string $iccid ICCID de la eSIM (19 o 20 dígitos).
+     * @return array Respuesta con las claves success, status, data y meta.
+     */
+    public function get_esim_by_iccid($iccid) {
+        $iccid = preg_replace('/[^0-9]/', '', (string) $iccid);
+
+        if ($iccid === '') {
+            return [
+                'success' => false,
+                'error'   => 'ICCID no válido.',
+            ];
+        }
+
+        return $this->make_request('/v2/sims/' . rawurlencode($iccid), 'GET', [], HOUR_IN_SECONDS);
     }
 }

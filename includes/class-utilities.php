@@ -9,6 +9,10 @@ class Airalo_Utilities {
 
     public static function get_instance($logger = null) {
         if (!isset(self::$instance)) {
+            if ($logger === null) {
+                $logger = Airalo_Logger::get_instance();
+            }
+
             self::$instance = new self($logger);
         }
         return self::$instance;
